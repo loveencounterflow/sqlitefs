@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fmt::Display;
-use std::error::Error as stdError;
+// use std::error::Error as stdError;
 
 use failure::{Backtrace, Context, Fail};
 
@@ -72,7 +72,7 @@ impl From<rusqlite::Error> for Error {
         Error {
             inner: Context::new(
                 ErrorKind::SqliteError {
-                    description: String::from(format!("{} {:?}", err.description(), err))
+                    description: String::from(format!("{} {:?}", err.to_string(), err))
                 }
             )
         }
