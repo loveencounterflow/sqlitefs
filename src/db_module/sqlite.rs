@@ -51,12 +51,12 @@ fn const_to_file_type(kind: u32) -> FileType {
 /// Release all data in "inode", after "offset" byte.
 fn release_data(inode: u32, offset: u32, tx: &Connection) -> Result<()> {
     if offset == 0 {
-        tx.execute("DELETE FROM data WHERE file_id=$1", params![inode])?;
+        tx.execute("DELETE FROM sqlitefs_data WHERE file_id=$1", params![inode])?;
     } else {
         let mut block = offset / BLOCK_SIZE;
         if offset % BLOCK_SIZE != 0 {
             block = offset / BLOCK_SIZE + 1;
-            let sql = "SELECT data FROM data WHERE file_id=$1 and block_num = $2";
+            let sql = "SELECT data FROM sqlitefs_data WHERE file_id=$1 and block_num = $2";
             let mut stmt = tx.prepare(sql)?;
             let mut data: Vec<u8> = match stmt.query_row(params![inode, block], |row| row.get(0)) {
                 Ok(n) => n,
@@ -69,12 +69,12 @@ fn release_data(inode: u32, offset: u32, tx: &Connection) -> Result<()> {
                 }
             };
             data.resize((offset % BLOCK_SIZE) as usize, 0);
-            tx.execute("REPLACE INTO data \
+            tx.execute("REPLACE INTO sqlitefs_data \
             (file_id, block_num, data)
             VALUES($1, $2, $3)",
                        params![inode, block, data])?;
         }
-        tx.execute("DELETE FROM data WHERE file_id=$1 and block_num > $2", params![inode, block])?;
+        tx.execute("DELETE FROM sqlitefs_data WHERE file_id=$1 and block_num > $2", params![inode, block])?;
     }
     Ok(())
 }
@@ -87,22 +87,22 @@ fn update_time(inode: u32, sql: &str, time: DateTime<Utc>, tx: &Connection) -> R
 }
 
 fn update_atime(inode: u32, time: DateTime<Utc>, tx: &Connection) -> Result<()> {
-    let sql = "UPDATE metadata SET atime=datetime($1), atime_nsec=$2 WHERE id=$3";
+    let sql = "UPDATE sqlitefs_metadata SET atime=datetime($1), atime_nsec=$2 WHERE id=$3";
     update_time(inode, sql, time, tx)
 }
 
 fn update_mtime(inode: u32, time: DateTime<Utc>, tx: &Connection) -> Result<()> {
-    let sql = "UPDATE metadata SET mtime=datetime($1), mtime_nsec=$2 WHERE id=$3";
+    let sql = "UPDATE sqlitefs_metadata SET mtime=datetime($1), mtime_nsec=$2 WHERE id=$3";
     update_time(inode, sql, time, tx)
 }
 
 fn update_ctime(inode: u32, time: DateTime<Utc>, tx: &Connection) -> Result<()> {
-    let sql = "UPDATE metadata SET ctime=datetime($1), ctime_nsec=$2 WHERE id=$3";
+    let sql = "UPDATE sqlitefs_metadata SET ctime=datetime($1), ctime_nsec=$2 WHERE id=$3";
     update_time(inode, sql, time, tx)
 }
 
 fn add_dentry(entry: DEntry, tx: &Connection) -> Result<()> {
-    let sql = "INSERT INTO dentry VALUES($1, $2, $3, $4)";
+    let sql = "INSERT INTO sqlitefs_dentry VALUES($1, $2, $3, $4)";
     tx.execute(
         sql,
         params![
@@ -147,27 +147,27 @@ fn parse_attr(mut stmt: Statement, params: &[&dyn ToSql]) -> Result<Option<DBFil
 
 fn get_inode_local(inode: u32, tx: &Connection) -> Result<Option<DBFileAttr>> {
     let sql = "SELECT \
-            metadata.id,\
-            metadata.size,\
-            metadata.atime,\
-            metadata.atime_nsec,\
-            metadata.mtime,\
-            metadata.mtime_nsec,\
-            metadata.ctime,\
-            metadata.ctime_nsec,\
-            metadata.crtime,\
-            metadata.crtime_nsec,\
-            metadata.kind, \
-            metadata.mode,\
+            sqlitefs_metadata.id,\
+            sqlitefs_metadata.size,\
+            sqlitefs_metadata.atime,\
+            sqlitefs_metadata.atime_nsec,\
+            sqlitefs_metadata.mtime,\
+            sqlitefs_metadata.mtime_nsec,\
+            sqlitefs_metadata.ctime,\
+            sqlitefs_metadata.ctime_nsec,\
+            sqlitefs_metadata.crtime,\
+            sqlitefs_metadata.crtime_nsec,\
+            sqlitefs_metadata.kind, \
+            sqlitefs_metadata.mode,\
             ncount.nlink,\
-            metadata.uid,\
-            metadata.gid,\
-            metadata.rdev,\
-            metadata.flags,\
+            sqlitefs_metadata.uid,\
+            sqlitefs_metadata.gid,\
+            sqlitefs_metadata.rdev,\
+            sqlitefs_metadata.flags,\
             blocknum.block_num \
-            FROM metadata \
-            LEFT JOIN (SELECT count(block_num) block_num FROM data WHERE file_id=$1) AS blocknum \
-            LEFT JOIN ( SELECT COUNT(child_id) nlink FROM dentry WHERE child_id=$1 GROUP BY child_id) AS ncount \
+            FROM sqlitefs_metadata \
+            LEFT JOIN (SELECT count(block_num) block_num FROM sqlitefs_data WHERE file_id=$1) AS blocknum \
+            LEFT JOIN ( SELECT COUNT(child_id) nlink FROM sqlitefs_dentry WHERE child_id=$1 GROUP BY child_id) AS ncount \
             WHERE id=$1";
     let stmt = tx.prepare(sql)?;
     let params = params![inode];
@@ -175,7 +175,7 @@ fn get_inode_local(inode: u32, tx: &Connection) -> Result<Option<DBFileAttr>> {
 }
 
 fn get_dentry_single(parent: u32, name: &str, tx: &Connection) -> Result<Option<DEntry>> {
-    let sql = "SELECT child_id, file_type FROM dentry WHERE  parent_id=$1 and name=$2";
+    let sql = "SELECT child_id, file_type FROM sqlitefs_dentry WHERE  parent_id=$1 and name=$2";
     let mut stmt = tx.prepare(sql)?;
     let res: Option<DEntry> = match stmt.query_row(
         params![parent, name], |row| Ok(Some(DEntry{
@@ -198,19 +198,19 @@ fn get_dentry_single(parent: u32, name: &str, tx: &Connection) -> Result<Option<
 }
 
 fn delete_dentry_local(parent: u32, name: &str, tx: &Connection) -> Result<()> {
-    let sql = "DELETE FROM dentry WHERE parent_id=$1 and name=$2";
+    let sql = "DELETE FROM sqlitefs_dentry WHERE parent_id=$1 and name=$2";
     tx.execute(sql, params![parent, name])?;
     Ok(())
 }
 
 fn delete_sub_dentry(id: u32, tx: &Connection) -> Result<()> {
-    let sql = "DELETE FROM dentry WHERE parent_id=$1";
+    let sql = "DELETE FROM sqlitefs_dentry WHERE parent_id=$1";
     tx.execute(sql, params![id])?;
     Ok(())
 }
 
 fn check_directory_is_empty_local(inode: u32, tx: &Connection) -> Result<bool> {
-    let sql = "SELECT name FROM dentry where parent_id=$1";
+    let sql = "SELECT name FROM sqlitefs_dentry where parent_id=$1";
     let mut stmt = tx.prepare(sql)?;
     let rows = stmt.query_map(params![inode], |row| {
         Ok({
@@ -229,7 +229,7 @@ fn check_directory_is_empty_local(inode: u32, tx: &Connection) -> Result<bool> {
 }
 
 fn add_inode_local(attr: &DBFileAttr, tx: &Connection) -> Result<u32> {
-    let sql = "INSERT INTO metadata \
+    let sql = "INSERT INTO sqlitefs_metadata \
             (size,\
             atime,\
             atime_nsec,\
@@ -306,9 +306,9 @@ impl DbModule for Sqlite {
     fn init(&mut self) -> Result<()> {
         let table_search_sql = "SELECT count(name) FROM sqlite_master WHERE type='table' AND name=$1";
         {
-            let row_count: u32 = self.conn.query_row(table_search_sql, params!["metadata"], |row| row.get(0) )?;
+            let row_count: u32 = self.conn.query_row(table_search_sql, params!["sqlitefs_metadata"], |row| row.get(0) )?;
             if row_count == 0 {
-                let sql = "CREATE TABLE metadata(\
+                let sql = "CREATE TABLE sqlitefs_metadata(\
                     id integer primary key,\
                     size int default 0 not null,\
                     atime text,\
@@ -328,52 +328,52 @@ impl DbModule for Sqlite {
                     flags int default 0 \
                     )";
                 let res = self.conn.execute(sql, params![])?;
-                debug!("metadata table: {}", res);
+                debug!("sqlitefs_metadata table: {}", res);
             }
         }
         {
-            let row_count: u32 = self.conn.query_row(table_search_sql, params!["dentry"], |row| row.get(0) )?;
+            let row_count: u32 = self.conn.query_row(table_search_sql, params!["sqlitefs_dentry"], |row| row.get(0) )?;
             if row_count == 0 {
-                let sql = "CREATE TABLE dentry(\
+                let sql = "CREATE TABLE sqlitefs_dentry(\
                     parent_id int,\
                     child_id int,\
                     file_type int,\
                     name text,\
-                    foreign key (parent_id) references metadata(id) on delete cascade,\
-                    foreign key (child_id) references metadata(id) on delete cascade,\
+                    foreign key (parent_id) references sqlitefs_metadata(id) on delete cascade,\
+                    foreign key (child_id) references sqlitefs_metadata(id) on delete cascade,\
                     primary key (parent_id, name) \
                     )";
                 self.conn.execute(sql, params![])?;
             }
         }
         {
-            let row_count: u32 = self.conn.query_row(table_search_sql, params!["data"], |row| row.get(0) )?;
+            let row_count: u32 = self.conn.query_row(table_search_sql, params!["sqlitefs_data"], |row| row.get(0) )?;
             if row_count == 0 {
-                let sql = "CREATE TABLE data(\
+                let sql = "CREATE TABLE sqlitefs_data(\
                     file_id int,\
                     block_num int,\
                     data blob,\
-                    foreign key (file_id) references metadata(id) on delete cascade,\
+                    foreign key (file_id) references sqlitefs_metadata(id) on delete cascade,\
                     primary key (file_id, block_num) \
                     )";
                 self.conn.execute(sql, params![])?;
             }
         }
         {
-            let row_count: u32 = self.conn.query_row(table_search_sql, params!["xattr"], |row| row.get(0) )?;
+            let row_count: u32 = self.conn.query_row(table_search_sql, params!["sqlitefs_xattr"], |row| row.get(0) )?;
             if row_count == 0 {
-                let sql = "CREATE TABLE xattr(\
+                let sql = "CREATE TABLE sqlitefs_xattr(\
                     file_id int,\
                     name text,\
                     value text,\
-                    foreign key (file_id) references metadata(id) on delete cascade,\
+                    foreign key (file_id) references sqlitefs_metadata(id) on delete cascade,\
                     primary key (file_id, name) \
                     )";
                 self.conn.execute(sql, params![])?;
             }
         }
         {
-            let sql = "SELECT count(id) FROM metadata WHERE id=1";
+            let sql = "SELECT count(id) FROM sqlitefs_metadata WHERE id=1";
             let row_count: u32 = self.conn.query_row(sql, params![], |row| row.get(0) )?;
             if row_count == 0 {
                 let now = SystemTime::now();
@@ -397,7 +397,7 @@ impl DbModule for Sqlite {
             }
         }
         {
-            let sql = "SELECT count(parent_id) FROM dentry WHERE parent_id=1 and name='.'";
+            let sql = "SELECT count(parent_id) FROM sqlitefs_dentry WHERE parent_id=1 and name='.'";
             let row_count: u32 = self.conn.query_row(sql, params![], |row| row.get(0) )?;
             if row_count == 0 {
                 let root_dir = DEntry{
@@ -410,7 +410,7 @@ impl DbModule for Sqlite {
             }
         }
         {
-            let sql = "SELECT count(parent_id) FROM dentry WHERE parent_id=1 and name='..'";
+            let sql = "SELECT count(parent_id) FROM sqlitefs_dentry WHERE parent_id=1 and name='..'";
             let row_count: u32 = self.conn.query_row(sql, params![], |row| row.get(0) )?;
             if row_count == 0 {
                 let root_dir = DEntry{
@@ -448,7 +448,7 @@ impl DbModule for Sqlite {
     }
 
     fn update_inode(&mut self, attr: &DBFileAttr, truncate: bool) -> Result<()> {
-        let sql = "UPDATE metadata SET \
+        let sql = "UPDATE sqlitefs_metadata SET \
             size=$1,\
             atime=datetime($2),\
             atime_nsec=$3,\
@@ -512,7 +512,7 @@ impl DbModule for Sqlite {
     }
 
     fn delete_inode_if_noref(&mut self, inode: u32) -> Result<()> {
-        let sql = "SELECT count(child_id) FROM dentry WHERE child_id=$1";
+        let sql = "SELECT count(child_id) FROM sqlitefs_dentry WHERE child_id=$1";
         let tx = self.conn.transaction()?;
         let nlink: u32;
         {
@@ -520,7 +520,7 @@ impl DbModule for Sqlite {
             nlink = stmt.query_row(params![inode], |row| row.get(0))?;
         }
         if nlink == 0 {
-            let sql = "DELETE FROM metadata WHERE id=$1";
+            let sql = "DELETE FROM sqlitefs_metadata WHERE id=$1";
             tx.execute(sql, params![inode])?;
         }
         tx.commit()?;
@@ -528,7 +528,7 @@ impl DbModule for Sqlite {
     }
 
     fn get_dentry(&self, inode: u32) -> Result<Vec<DEntry>> {
-        let sql = "SELECT child_id, file_type, name FROM dentry WHERE parent_id=$1 ORDER BY name";
+        let sql = "SELECT child_id, file_type, name FROM sqlitefs_dentry WHERE parent_id=$1 ORDER BY name";
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![inode], |row| {
             Ok(DEntry{parent_ino: inode,
@@ -585,7 +585,7 @@ impl DbModule for Sqlite {
     }
 
     fn delete_dentry(&mut self, parent: u32, name: &str) -> Result<u32> {
-        let sql = "SELECT child_id FROM dentry WHERE parent_id=$1 and name=$2";
+        let sql = "SELECT child_id FROM sqlitefs_dentry WHERE parent_id=$1 and name=$2";
         let now = Utc::now();
         let tx = self.conn.transaction()?;
         let child: u32;
@@ -603,7 +603,7 @@ impl DbModule for Sqlite {
     }
 
     fn move_dentry(&mut self, parent: u32, name: &str, new_parent: u32, new_name: &str) -> Result<Option<u32>> {
-        let sql = "UPDATE dentry SET parent_id=$1, name=$2 where parent_id=$3 and name=$4";
+        let sql = "UPDATE sqlitefs_dentry SET parent_id=$1, name=$2 where parent_id=$3 and name=$4";
         let now = Utc::now();
         let tx = self.conn.transaction()?;
         let dentry = match get_dentry_single(parent, name, &tx)? {
@@ -663,7 +663,7 @@ impl DbModule for Sqlite {
         }
         tx.execute(sql, params![new_parent, new_name, parent, name])?;
         if parent != new_parent && dentry.file_type == FileType::Directory {
-            let sql = "UPDATE dentry set child_id=$1 WHERE parent_id=$2 and name='..'";
+            let sql = "UPDATE sqlitefs_dentry set child_id=$1 WHERE parent_id=$2 and name='..'";
             tx.execute(sql, params![new_parent, dentry.child_ino])?;
         }
         update_ctime(dentry.child_ino, now, &tx)?;
@@ -683,33 +683,33 @@ impl DbModule for Sqlite {
 
     fn lookup(&mut self, parent: u32, name: &str) -> Result<Option<DBFileAttr>> {
         let sql = "SELECT \
-            metadata.id,\
-            metadata.size,\
-            metadata.atime,\
-            metadata.atime_nsec,\
-            metadata.mtime,\
-            metadata.mtime_nsec,\
-            metadata.ctime,\
-            metadata.ctime_nsec,\
-            metadata.crtime,\
-            metadata.crtime_nsec,\
-            metadata.kind, \
-            metadata.mode,\
+            sqlitefs_metadata.id,\
+            sqlitefs_metadata.size,\
+            sqlitefs_metadata.atime,\
+            sqlitefs_metadata.atime_nsec,\
+            sqlitefs_metadata.mtime,\
+            sqlitefs_metadata.mtime_nsec,\
+            sqlitefs_metadata.ctime,\
+            sqlitefs_metadata.ctime_nsec,\
+            sqlitefs_metadata.crtime,\
+            sqlitefs_metadata.crtime_nsec,\
+            sqlitefs_metadata.kind, \
+            sqlitefs_metadata.mode,\
             ncount.nlink,\
-            metadata.uid,\
-            metadata.gid,\
-            metadata.rdev,\
-            metadata.flags, \
+            sqlitefs_metadata.uid,\
+            sqlitefs_metadata.gid,\
+            sqlitefs_metadata.rdev,\
+            sqlitefs_metadata.flags, \
             blocknum.block_num \
-            FROM dentry \
-            INNER JOIN metadata \
-            ON metadata.id=dentry.child_id \
-            AND dentry.parent_id=$1 \
-            AND dentry.name=$2 \
-            LEFT JOIN (SELECT file_id file_id, count(block_num) block_num from data) AS blocknum \
-            ON dentry.child_id = blocknum.file_id \
-            LEFT JOIN ( SELECT child_id, COUNT(child_id) nlink FROM dentry GROUP BY child_id) AS ncount \
-            ON dentry.child_id = ncount.child_id \
+            FROM sqlitefs_dentry \
+            INNER JOIN sqlitefs_metadata \
+            ON sqlitefs_metadata.id=sqlitefs_dentry.child_id \
+            AND sqlitefs_dentry.parent_id=$1 \
+            AND sqlitefs_dentry.name=$2 \
+            LEFT JOIN (SELECT file_id file_id, count(block_num) block_num from sqlitefs_data) AS blocknum \
+            ON sqlitefs_dentry.child_id = blocknum.file_id \
+            LEFT JOIN ( SELECT child_id, COUNT(child_id) nlink FROM sqlitefs_dentry GROUP BY child_id) AS ncount \
+            ON sqlitefs_dentry.child_id = ncount.child_id \
             ";
         let tx = self.conn.transaction()?;
         let stmt = tx.prepare(sql)?;
@@ -726,7 +726,7 @@ impl DbModule for Sqlite {
         {
             let mut stmt = tx.prepare(
                 "SELECT \
-                data FROM data WHERE file_id=$1 AND block_num=$2")?;
+                data FROM sqlitefs_data WHERE file_id=$1 AND block_num=$2")?;
             row = match stmt.query_row(params![inode, block], |row| row.get(0)) {
                 Ok(n) => n,
                 Err(err) => {
@@ -746,13 +746,13 @@ impl DbModule for Sqlite {
     fn write_data(&mut self, inode:u32, block: u32, data: &[u8], size: u32) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            let db_size: u32 = tx.query_row("SELECT size FROM metadata WHERE id=$1", params![inode], |row| row.get(0))?;
-            tx.execute("REPLACE INTO data \
+            let db_size: u32 = tx.query_row("SELECT size FROM sqlitefs_metadata WHERE id=$1", params![inode], |row| row.get(0))?;
+            tx.execute("REPLACE INTO sqlitefs_data \
             (file_id, block_num, data)
             VALUES($1, $2, $3)",
                        params![inode, block, data])?;
             if size > db_size {
-                tx.execute("UPDATE metadata SET size=$1 WHERE id=$2", params![size, inode])?;
+                tx.execute("UPDATE sqlitefs_metadata SET size=$1 WHERE id=$2", params![size, inode])?;
             }
         }
         let time = Utc::now();
@@ -763,13 +763,13 @@ impl DbModule for Sqlite {
     }
 
     fn release_data(&self, inode: u32) -> Result<()> {
-        self.conn.execute("DELETE FROM data WHERE file_id=$1", params![inode])?;
+        self.conn.execute("DELETE FROM sqlitefs_data WHERE file_id=$1", params![inode])?;
         Ok(())
     }
 
     fn delete_all_noref_inode(&mut self) -> Result<()> {
         self.conn.execute(
-            "DELETE FROM metadata WHERE NOT EXISTS (SELECT 'x' FROM dentry WHERE metadata.id = dentry.child_id)",
+            "DELETE FROM sqlitefs_metadata WHERE NOT EXISTS (SELECT 'x' FROM sqlitefs_dentry WHERE sqlitefs_metadata.id = sqlitefs_dentry.child_id)",
             params![]
         )?;
         Ok(())
@@ -782,7 +782,7 @@ impl DbModule for Sqlite {
     fn set_xattr(&mut self, inode: u32, key: &str, value: &[u8]) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            tx.execute("REPLACE INTO xattr \
+            tx.execute("REPLACE INTO sqlitefs_xattr \
             (file_id, name, value)
             VALUES($1, $2, $3)",
                        params![inode, key, value])?;
@@ -796,7 +796,7 @@ impl DbModule for Sqlite {
     fn get_xattr(&self, inode: u32, key: &str) -> Result<Vec<u8>> {
         let mut stmt = self.conn.prepare(
             "SELECT \
-            value FROM xattr WHERE file_id=$1 AND name=$2")?;
+            value FROM sqlitefs_xattr WHERE file_id=$1 AND name=$2")?;
         let row: Vec<u8> = match stmt.query_row(params![inode, key], |row| row.get(0)) {
             Ok(n) => n,
             Err(err) => {
@@ -816,7 +816,7 @@ impl DbModule for Sqlite {
     }
 
     fn list_xattr(&self, inode: u32) -> Result<Vec<String>> {
-        let sql = "SELECT name FROM xattr WHERE file_id=$1 ORDER BY name";
+        let sql = "SELECT name FROM sqlitefs_xattr WHERE file_id=$1 ORDER BY name";
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![inode], |row| {
             Ok(row.get(0)?)
@@ -831,7 +831,7 @@ impl DbModule for Sqlite {
     fn delete_xattr(&mut self, inode: u32, key: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            tx.execute("DELETE FROM xattr \
+            tx.execute("DELETE FROM sqlitefs_xattr \
             WHERE file_id = $1 AND name = $2",
                        params![inode, key])?;
         }
